@@ -75,6 +75,12 @@ class LightGCL(nn.Module):
             E_u_norm = self.E_u
             G_i_norm = self.G_i
             E_i_norm = self.E_i
+
+            G_u_norm = F.normalize(G_u_norm, dim=1)
+            E_u_norm = F.normalize(E_u_norm, dim=1)
+            G_i_norm = F.normalize(G_i_norm, dim=1)
+            E_i_norm = F.normalize(E_i_norm, dim=1)
+
             neg_score = torch.log(torch.exp(G_u_norm[uids] @ E_u_norm.T / self.temp).sum(1) + 1e-8).mean()
             neg_score += torch.log(torch.exp(G_i_norm[iids] @ E_i_norm.T / self.temp).sum(1) + 1e-8).mean()
             pos_score = (torch.clamp((G_u_norm[uids] * E_u_norm[uids]).sum(1) / self.temp,-5.0,5.0)).mean() + (torch.clamp((G_i_norm[iids] * E_i_norm[iids]).sum(1) / self.temp,-5.0,5.0)).mean()
