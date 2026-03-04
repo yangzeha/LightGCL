@@ -100,7 +100,7 @@ for epoch in range(epoch_no):
     epoch_loss_r = 0
     epoch_loss_s = 0
     train_loader.dataset.neg_sampling()
-    for i, batch in enumerate(tqdm(train_loader)):
+    for i, batch in enumerate(train_loader):
         uids, pos, neg = batch
         uids = uids.long().to(torch.device(device))
         pos = pos.long().to(torch.device(device))
@@ -137,7 +137,7 @@ for epoch in range(epoch_no):
         all_ndcg_20 = 0
         all_recall_40 = 0
         all_ndcg_40 = 0
-        for batch in tqdm(range(batch_no)):
+        for batch in range(batch_no):
             start = batch*batch_user
             end = min((batch+1)*batch_user,len(test_uids))
 
