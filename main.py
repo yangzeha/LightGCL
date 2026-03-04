@@ -4,13 +4,16 @@ import pickle
 from model import LightGCL
 from utils import metrics, scipy_sparse_mat_to_torch_sparse_tensor
 import pandas as pd
-from parser import args
+from parse_args import args
 from tqdm import tqdm
 import time
 import torch.utils.data as data
 from utils import TrnData
 
-device = 'cuda:' + args.cuda
+if torch.cuda.is_available():
+    device = 'cuda:' + args.cuda
+else:
+    device = 'cpu'
 
 # hyperparameters
 d = args.d
@@ -51,11 +54,11 @@ train_data = TrnData(train)
 train_loader = data.DataLoader(train_data, batch_size=args.inter_batch, shuffle=True, num_workers=0)
 
 adj_norm = scipy_sparse_mat_to_torch_sparse_tensor(train)
-adj_norm = adj_norm.coalesce().cuda(torch.device(device))
+adj_norm = adj_norm.coalesce().to(torch.device(device))
 print('Adj matrix normalized.')
 
 # perform svd reconstruction
-adj = scipy_sparse_mat_to_torch_sparse_tensor(train).coalesce().cuda(torch.device(device))
+adj = scipy_sparse_mat_to_torch_sparse_tensor(train).coalesce().to(torch.device(device))
 print('Performing SVD...')
 svd_u,s,svd_v = torch.svd_lowrank(adj, q=svd_q)
 u_mul_s = svd_u @ (torch.diag(s))
@@ -82,7 +85,7 @@ ndcg_40_y = []
 
 model = LightGCL(adj_norm.shape[0], adj_norm.shape[1], d, u_mul_s, v_mul_s, svd_u.T, svd_v.T, train_csr, adj_norm, l, temp, lambda_1, lambda_2, dropout, batch_user, device)
 #model.load_state_dict(torch.load('saved_model.pt'))
-model.cuda(torch.device(device))
+model.to(torch.device(device))
 optimizer = torch.optim.Adam(model.parameters(),weight_decay=0,lr=lr)
 #optimizer.load_state_dict(torch.load('saved_optim.pt'))
 
@@ -99,9 +102,9 @@ for epoch in range(epoch_no):
     train_loader.dataset.neg_sampling()
     for i, batch in enumerate(tqdm(train_loader)):
         uids, pos, neg = batch
-        uids = uids.long().cuda(torch.device(device))
-        pos = pos.long().cuda(torch.device(device))
-        neg = neg.long().cuda(torch.device(device))
+        uids = uids.long().to(torch.device(device))
+        pos = pos.long().to(torch.device(device))
+        neg = neg.long().to(torch.device(device))
         iids = torch.concat([pos, neg], dim=0)
 
         # feed
@@ -138,7 +141,7 @@ for epoch in range(epoch_no):
             start = batch*batch_user
             end = min((batch+1)*batch_user,len(test_uids))
 
-            test_uids_input = torch.LongTensor(test_uids[start:end]).cuda(torch.device(device))
+            test_uids_input = torch.LongTensor(test_uids[start:end]).to(torch.device(device))
             predictions = model(test_uids_input,None,None,None,test=True)
             predictions = np.array(predictions.cpu())
 
@@ -172,7 +175,7 @@ for batch in range(batch_no):
     start = batch*batch_user
     end = min((batch+1)*batch_user,len(test_uids))
 
-    test_uids_input = torch.LongTensor(test_uids[start:end]).cuda(torch.device(device))
+    test_uids_input = torch.LongTensor(test_uids[start:end]).to(torch.device(device))
     predictions = model(test_uids_input,None,None,None,test=True)
     predictions = np.array(predictions.cpu())
 

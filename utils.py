@@ -46,7 +46,7 @@ def spmm(sp, emb, device):
     cols = sp.indices()[1]
     rows = sp.indices()[0]
     col_segs =  emb[cols] * torch.unsqueeze(sp.values(),dim=1)
-    result = torch.zeros((sp.shape[0],emb.shape[1])).cuda(torch.device(device))
+    result = torch.zeros((sp.shape[0],emb.shape[1])).to(torch.device(device)) 
     result.index_add_(0, rows, col_segs)
     return result
 

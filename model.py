@@ -43,7 +43,7 @@ class LightGCL(nn.Module):
         if test==True:  # testing phase
             preds = self.E_u[uids] @ self.E_i.T
             mask = self.train_csr[uids.cpu().numpy()].toarray()
-            mask = torch.Tensor(mask).cuda(torch.device(self.device))
+            mask = torch.Tensor(mask).to(torch.device(self.device))
             preds = preds * (1-mask) - 1e8 * mask
             predictions = preds.argsort(descending=True)
             return predictions
