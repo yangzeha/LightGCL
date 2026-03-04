@@ -1,0 +1,5 @@
+﻿__pycache__/
+.ipynb_checkpoints/
+saved_model/
+log/
+**/.git_backup
