@@ -21,6 +21,7 @@ class LightGCL(nn.Module):
         self.G_u_list = [None] * (l+1)
         self.G_i_list = [None] * (l+1)
         self.temp = temp
+        self.tau = 0.2
         self.lambda_1 = lambda_1
         self.dropout = dropout
         self.act = nn.LeakyReLU(0.5)
@@ -121,10 +122,10 @@ class LightGCL(nn.Module):
             loss_msbe = torch.tensor(0.0).to(self.device)
             if self.msb_rate > 0:
                 sim_uids = self.get_msb_samples(uids, self.user_neighbors)
-                loss_msbe_u = InfoNCE(self.E_u[uids], self.E_u[sim_uids], self.temp)
+                loss_msbe_u = InfoNCE(self.E_u[uids], self.E_u[sim_uids], self.tau)
                 
                 sim_iids = self.get_msb_samples(iids, self.item_neighbors)
-                loss_msbe_i = InfoNCE(self.E_i[iids], self.E_i[sim_iids], self.temp)
+                loss_msbe_i = InfoNCE(self.E_i[iids], self.E_i[sim_iids], self.tau)
                 
                 loss_msbe = loss_msbe_u + loss_msbe_i
 
