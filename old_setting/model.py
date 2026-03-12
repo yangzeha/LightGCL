@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-from utils import sparse_dropout, spmm
+import random
+from utils import sparse_dropout, spmm, InfoNCE
 
 class LightGCL(nn.Module):
-    def __init__(self, n_u, n_i, d, u_mul_s, v_mul_s, ut, vt, train_csr, adj_norm, l, temp, lambda_1, dropout, batch_user, device):
+    def __init__(self, n_u, n_i, d, u_mul_s, v_mul_s, ut, vt, train_csr, adj_norm, l, temp, lambda_1, dropout, batch_user, device, user_neighbors=None, item_neighbors=None, msb_rate=0.0):
         super(LightGCL,self).__init__()
         self.E_u_0 = nn.Parameter(nn.init.xavier_uniform_(torch.empty(n_u,d)))
         self.E_i_0 = nn.Parameter(nn.init.xavier_uniform_(torch.empty(n_i,d)))
@@ -25,6 +26,10 @@ class LightGCL(nn.Module):
         self.act = nn.LeakyReLU(0.5)
         self.batch_user = batch_user
         self.Ws = nn.ModuleList([W_contrastive(d) for i in range(l)])
+        
+        self.user_neighbors = user_neighbors if user_neighbors is not None else {}
+        self.item_neighbors = item_neighbors if item_neighbors is not None else {}
+        self.msb_rate = msb_rate
 
         self.E_u = None
         self.E_i = None
@@ -36,11 +41,21 @@ class LightGCL(nn.Module):
 
         self.device = device
 
+    def get_msb_samples(self, indices, neighbor_dict):
+        res = []
+        for i in indices:
+            i = int(i)
+            if i in neighbor_dict and len(neighbor_dict[i]) > 0:
+                res.append(random.choice(neighbor_dict[i]))
+            else:
+                res.append(i)
+        return torch.tensor(res).long().to(self.device)
+
     def forward(self, uids, iids, pos, neg, test=False):
         if test==True:  # testing phase
             preds = self.E_u[uids] @ self.E_i.T
             mask = self.train_csr[uids.cpu().numpy()].toarray()
-            mask = torch.Tensor(mask).cuda(torch.device(self.device))
+            mask = torch.Tensor(mask).to(self.device)
             preds = preds * (1-mask)
             predictions = preds.argsort(descending=True)
             return predictions
@@ -67,7 +82,7 @@ class LightGCL(nn.Module):
             # cl loss
             loss_s = 0
             for l in range(1,self.l+1):
-                u_mask = (torch.rand(len(uids))>0.5).float().cuda(self.device)
+                u_mask = (torch.rand(len(uids))>0.5).float().to(self.device)
 
                 gnn_u = nn.functional.normalize(self.Z_u_list[l][uids],p=2,dim=1)
                 hyper_u = nn.functional.normalize(self.G_u_list[l][uids],p=2,dim=1)
@@ -77,7 +92,7 @@ class LightGCL(nn.Module):
                 loss_s_u = ((-1 * torch.log(pos_score/(neg_score+1e-8) + 1e-8))*u_mask).sum()
                 loss_s = loss_s + loss_s_u
 
-                i_mask = (torch.rand(len(iids))>0.5).float().cuda(self.device)
+                i_mask = (torch.rand(len(iids))>0.5).float().to(self.device)
 
                 gnn_i = nn.functional.normalize(self.Z_i_list[l][iids],p=2,dim=1)
                 hyper_i = nn.functional.normalize(self.G_i_list[l][iids],p=2,dim=1)
@@ -102,10 +117,21 @@ class LightGCL(nn.Module):
                 loss_r = loss_r + bpr.sum()
             loss_r = loss_r/self.batch_user
 
+            # msbe l_sim loss
+            loss_msbe = torch.tensor(0.0).to(self.device)
+            if self.msb_rate > 0:
+                sim_uids = self.get_msb_samples(uids, self.user_neighbors)
+                loss_msbe_u = InfoNCE(self.E_u[uids], self.E_u[sim_uids], self.temp)
+                
+                sim_iids = self.get_msb_samples(iids, self.item_neighbors)
+                loss_msbe_i = InfoNCE(self.E_i[iids], self.E_i[sim_iids], self.temp)
+                
+                loss_msbe = loss_msbe_u + loss_msbe_i
+
             # total loss
-            loss = loss_r + self.lambda_1 * loss_s
+            loss = loss_r + self.lambda_1 * loss_s + self.msb_rate * loss_msbe
             #print('loss',loss.item(),'loss_r',loss_r.item(),'loss_s',loss_s.item())
-            return loss, loss_r, loss_s
+            return loss, loss_r, loss_s, loss_msbe
 
 class W_contrastive(nn.Module):
     def __init__(self,d):

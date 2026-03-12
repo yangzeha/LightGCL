@@ -14,5 +14,7 @@ def parse_args():
     parser.add_argument('--temp', default=0.5, type=float, help='temperature in cl loss')
     parser.add_argument('--lambda2', default=1e-4, type=float, help='l2 reg weight')
     parser.add_argument('--cuda', default='0', type=str, help='the gpu to use')
+    parser.add_argument('--msb_rate', default=0.1, type=float, help='weight for msbe structural contrastive loss')
+    parser.add_argument('--sim_threshold', default=0.1, type=float, help='similarity threshold for neighbor search')
     return parser.parse_args()
 args = parse_args()

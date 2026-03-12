@@ -1,19 +1,23 @@
-import numpy as np
 import torch
+import numpy as np
 import pickle
 from model import LightGCL
-from utils import metrics, scipy_sparse_mat_to_torch_sparse_tensor
+from utils import metrics, scipy_sparse_mat_to_torch_sparse_tensor, load_msbe_neighbors
 import pandas as pd
-from parser import args
+from config import args
 from tqdm import tqdm
 import time
-from setproctitle import setproctitle
+#from setproctitle import setproctitle
 import os
 os.environ["TORCH_AUTOGRAD_SHUTDOWN_WAIT_LIMIT"] = "0"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-setproctitle('EXP@Xuheng')
+#setproctitle('EXP@Xuheng')
 
-device = 'cuda:' + args.cuda
+if torch.cuda.is_available():
+    device = torch.device('cuda:' + args.cuda)
+else:
+    device = torch.device('cpu')
 
 # hyperparameters
 d = args.d
@@ -30,6 +34,11 @@ svd_q = args.q
 
 # load data
 path = 'data/' + args.data + '/'
+if not os.path.exists(path):
+    path = '../data/' + args.data + '/'
+    if not os.path.exists(path):
+         path = 'data/' + args.data + '/'
+
 f = open(path+'trnMat.pkl','rb')
 train = pickle.load(f)
 #train_np = train.toarray()
@@ -43,7 +52,7 @@ print('user_num:',train.shape[0],'item_num:',train.shape[1],'lambda_1:',lambda_1
 
 epoch_user = min(train.shape[0], 30000)
 
-adj = scipy_sparse_mat_to_torch_sparse_tensor(train).coalesce().cuda(torch.device(device))
+adj = scipy_sparse_mat_to_torch_sparse_tensor(train).coalesce().to(device)
 
 print('Performing SVD...')
 svd_u,s,svd_v = torch.svd_lowrank(adj,q=svd_q)
@@ -58,7 +67,7 @@ colD = np.array(train.sum(0)).squeeze()
 for i in range(len(train.data)):
     train.data[i] = train.data[i] / pow(rowD[train.row[i]]*colD[train.col[i]], 0.5)
 adj_norm = scipy_sparse_mat_to_torch_sparse_tensor(train)
-adj_norm = adj_norm.coalesce().cuda(torch.device(device))
+adj_norm = adj_norm.coalesce().to(device)
 print('Adj matrix normalized.')
 
 test_labels = [[] for i in range(test.shape[0])]
@@ -67,6 +76,8 @@ for i in range(len(test.data)):
     col = test.col[i]
     test_labels[row].append(col)
 print('Test data processed.')
+
+user_neighbors, item_neighbors = load_msbe_neighbors(train_csr, args.sim_threshold)
 
 loss_list = []
 loss_r_list = []
@@ -77,9 +88,9 @@ ndcg_20_y = []
 recall_40_y = []
 ndcg_40_y = []
 
-model = LightGCL(adj_norm.shape[0], adj_norm.shape[1], d, u_mul_s, v_mul_s, svd_u.T, svd_v.T, train_csr, adj_norm, l, temp, lambda_1, dropout, batch_user, device)
+model = LightGCL(adj_norm.shape[0], adj_norm.shape[1], d, u_mul_s, v_mul_s, svd_u.T, svd_v.T, train_csr, adj_norm, l, temp, lambda_1, dropout, batch_user, device, user_neighbors, item_neighbors, args.msb_rate)
 #model.load_state_dict(torch.load('saved_model.pt'))
-model.cuda(torch.device(device))
+model.to(device)
 optimizer = torch.optim.Adam(model.parameters(),weight_decay=lambda_2,lr=lr)
 #optimizer.load_state_dict(torch.load('saved_optim.pt'))
 
@@ -105,6 +116,7 @@ for epoch in range(epoch_no):
     epoch_loss = 0
     epoch_loss_r = 0
     epoch_loss_s = 0
+    epoch_loss_msbe = 0
     for batch in tqdm(range(batch_no)):
         start = batch*batch_user
         end = min((batch+1)*batch_user,epoch_user)
@@ -122,33 +134,36 @@ for epoch in range(epoch_no):
             item_num = min(max_samp,len(positive_items))
             positive_items = positive_items[:item_num]
             negative_items = negative_items[:item_num]
-            pos.append(torch.LongTensor(positive_items).cuda(torch.device(device)))
-            neg.append(torch.LongTensor(negative_items).cuda(torch.device(device)))
+            pos.append(torch.LongTensor(positive_items).to(device))
+            neg.append(torch.LongTensor(negative_items).to(device))
             iids = iids.union(set(positive_items))
             iids = iids.union(set(negative_items))
-        iids = torch.LongTensor(list(iids)).cuda(torch.device(device))
-        uids = torch.LongTensor(batch_users).cuda(torch.device(device))
+        iids = torch.LongTensor(list(iids)).to(device)
+        uids = torch.LongTensor(batch_users).to(device)
 
         # feed
         optimizer.zero_grad()
-        loss, loss_r, loss_s= model(uids, iids, pos, neg)
+        loss, loss_r, loss_s, loss_msbe = model(uids, iids, pos, neg)
         loss.backward()
         optimizer.step()
         #print('batch',batch)
 
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         epoch_loss += loss.cpu().item()
         epoch_loss_r += loss_r.cpu().item()
         epoch_loss_s += loss_s.cpu().item()
+        epoch_loss_msbe += loss_msbe.cpu().item()
 
     epoch_loss = epoch_loss/batch_no
     epoch_loss_r = epoch_loss_r/batch_no
     epoch_loss_s = epoch_loss_s/batch_no
+    epoch_loss_msbe = epoch_loss_msbe/batch_no
     loss_list.append(epoch_loss)
     loss_r_list.append(epoch_loss_r)
     loss_s_list.append(epoch_loss_s)
-    print('Epoch:',epoch,'Loss:',epoch_loss,'Loss_r:',epoch_loss_r,'Loss_s:',epoch_loss_s)
+    print('Epoch:',epoch, 'Loss:',epoch_loss, 'Loss_r:',epoch_loss_r, 'Loss_s:',epoch_loss_s, 'Loss_msbe:', epoch_loss_msbe)
 
     if epoch % 3 == 0:  # test every 10 epochs
         test_uids = np.array([i for i in range(adj_norm.shape[0])])
@@ -162,7 +177,7 @@ for epoch in range(epoch_no):
             start = batch*batch_user
             end = min((batch+1)*batch_user,len(test_uids))
 
-            test_uids_input = torch.LongTensor(test_uids[start:end]).cuda(torch.device(device))
+            test_uids_input = torch.LongTensor(test_uids[start:end]).to(device)
             predictions = model(test_uids_input,None,None,None,test=True)
             predictions = np.array(predictions.cpu())
 
@@ -196,7 +211,7 @@ for batch in range(batch_no):
     start = batch*batch_user
     end = min((batch+1)*batch_user,len(test_uids))
 
-    test_uids_input = torch.LongTensor(test_uids[start:end]).cuda(torch.device(device))
+    test_uids_input = torch.LongTensor(test_uids[start:end]).to(device)
     predictions = model(test_uids_input,None,None,None,test=True)
     predictions = np.array(predictions.cpu())
 
